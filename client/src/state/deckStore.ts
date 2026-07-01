@@ -33,6 +33,12 @@ interface StudioState {
   themeSlug: string | null;
   /** Bumped on any theme mutation to refresh the theme nav + preview iframe. */
   themeNonce: number;
+  /** Active tab in the theme Inspector (lifted to the store so the preview's Alt-click
+   *  can switch to the Slide editor). */
+  themeInspectorTab: 'slide' | 'palette' | 'theme';
+  /** Pending "move the theme template editor's cursor to this element" request (Alt-click
+   *  in the theme preview). path = element-child indices from the template <section>. */
+  themeCodeJump: { path: number[]; nonce: number } | null;
   /** Desired fragment step for the selected slide; drives the preview. 'all' = fully revealed. */
   selectedStep: number | 'all';
   /** Fragment step the preview is actually showing (0 = base); for the navigator's active pill. */
@@ -53,8 +59,13 @@ interface StudioState {
   /** Pending "scroll the Styles editor to this selector" request; nonce re-triggers
    *  the same selector. Set by jumpToStyle, consumed by StyleEditor. */
   styleJump: { selector: string; nonce: number } | null;
+  /** Pending "move the slide editor's cursor to this element" request (Alt-click in the
+   *  preview). path = element-child indices from the slide <section>. Consumed by CodeEditor. */
+  codeJump: { key: string; path: number[]; nonce: number } | null;
   setInspectorTab: (tab: string) => void;
   jumpToStyle: (selector: string) => void;
+  /** Switch to the Code tab, select `key`, and put the cursor on the element at `path`. */
+  jumpToElement: (key: string, path: number[]) => void;
 
   /** "Add slide from theme" modal (deck mode) — opened by ⌘I or the navigator's ❖. */
   insertTheme: { open: boolean; afterKey: string | null };
@@ -86,6 +97,9 @@ interface StudioState {
   /** Switch the workspace to a theme (optionally selecting a standard slide). */
   selectTheme: (themeId: string, slug?: string) => Promise<void>;
   selectThemeSlug: (slug: string | null) => void;
+  setThemeInspectorTab: (tab: 'slide' | 'palette' | 'theme') => void;
+  /** Switch to the Slide editor and put the cursor on the template element at `path`. */
+  jumpToThemeElement: (path: number[]) => void;
   /** Re-fetch the current theme and bump the refresh nonce. */
   refreshTheme: () => Promise<void>;
   /** Bump the theme refresh nonce only (reloads the preview) — used after palette edits. */
@@ -100,8 +114,8 @@ interface StudioState {
   setCurrentStep: (step: number | null) => void;
   setResizing: (v: boolean) => void;
   /** Create a deck and optionally associate it with a theme. */
-  createDeck: (title: string, structure: string, themeId?: string) => Promise<string>;
-  /** "New deck" modal (name + theme + structure), opened from the top bar or ⌘K. */
+  createDeck: (title: string, themeId?: string) => Promise<string>;
+  /** "New deck" modal (name + theme), opened from the top bar or ⌘K. */
   newDeckOpen: boolean;
   openNewDeck: () => void;
   closeNewDeck: () => void;
@@ -129,6 +143,8 @@ export const useStudio = create<StudioState>((set, get) => ({
   theme: null,
   themeSlug: null,
   themeNonce: 0,
+  themeInspectorTab: 'slide',
+  themeCodeJump: null,
   selectedStep: 'all',
   currentStep: null,
   previewNonce: 0,
@@ -139,6 +155,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   jobLogs: {},
   inspectorTab: 'code',
   styleJump: null,
+  codeJump: null,
   insertTheme: { open: false, afterKey: null },
 
   setInspectorTab(tab) {
@@ -209,6 +226,15 @@ export const useStudio = create<StudioState>((set, get) => ({
     set({ themeSlug: slug });
   },
 
+  setThemeInspectorTab(tab) {
+    set({ themeInspectorTab: tab });
+  },
+
+  jumpToThemeElement(path) {
+    const nonce = (get().themeCodeJump?.nonce ?? 0) + 1;
+    set({ themeInspectorTab: 'slide', themeCodeJump: { path, nonce } });
+  },
+
   bumpThemeNonce() {
     set({ themeNonce: get().themeNonce + 1 });
   },
@@ -231,6 +257,12 @@ export const useStudio = create<StudioState>((set, get) => ({
   jumpToStyle(selector) {
     const nonce = (get().styleJump?.nonce ?? 0) + 1;
     set({ inspectorTab: 'styles', styleJump: { selector, nonce } });
+  },
+
+  jumpToElement(key, path) {
+    const nonce = (get().codeJump?.nonce ?? 0) + 1;
+    get().selectSlide(key); // load the slide into the Code editor
+    set({ inspectorTab: 'code', codeJump: { key, path, nonce } });
   },
 
   async refreshDecks() {
@@ -300,8 +332,8 @@ export const useStudio = create<StudioState>((set, get) => ({
     set({ resizing: v });
   },
 
-  async createDeck(title, structure, themeId) {
-    const { id } = await api.createDeck(title, structure);
+  async createDeck(title, themeId) {
+    const { id } = await api.createDeck(title);
     if (themeId) {
       try {
         await api.setDeckTheme(id, themeId); // materialize the theme's palette into the deck

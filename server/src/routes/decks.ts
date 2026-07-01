@@ -39,8 +39,8 @@ decksRouter.get(
 decksRouter.post(
   '/',
   asyncHandler(async (req, res) => {
-    const { title, structure } = req.body ?? {};
-    const id = await createDeck({ title, structure });
+    const { title } = req.body ?? {};
+    const id = await createDeck({ title });
     res.status(201).json({ id });
   }),
 );

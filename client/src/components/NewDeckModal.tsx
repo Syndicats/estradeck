@@ -3,15 +3,14 @@ import type { ThemeSummary } from '@studio/shared';
 import { useStudio } from '../state/deckStore';
 import * as api from '../api/client';
 
-/** Create a deck: give it a name, pick a theme (its palette/fonts are applied), and an
- *  optional slide structure. Opened from the top bar's "＋ New deck" or ⌘K. */
+/** Create a deck: give it a name and pick a theme (its palette/fonts are applied). The
+ *  deck starts as a single title slide. Opened from the top bar's "＋ New deck" or ⌘K. */
 export function NewDeckModal() {
   const close = useStudio((s) => s.closeNewDeck);
   const createDeck = useStudio((s) => s.createDeck);
   const showToast = useStudio((s) => s.showToast);
 
   const [name, setName] = useState('');
-  const [structure, setStructure] = useState('1,1,d,1,1');
   const [themeId, setThemeId] = useState<string>('');
   const [themes, setThemes] = useState<ThemeSummary[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -33,7 +32,7 @@ export function NewDeckModal() {
     if (!name.trim() || busy) return;
     setBusy(true);
     try {
-      await createDeck(name.trim(), structure.trim() || '1,1,1,1,1', themeId || undefined);
+      await createDeck(name.trim(), themeId || undefined);
       close();
     } catch (e) {
       showToast('error', (e as Error).message);
@@ -82,13 +81,6 @@ export function NewDeckModal() {
                 </option>
               ))}
             </select>
-          </label>
-
-          <label className="tm-field">
-            <span>
-              Structure <span className="nd-hint">1 = slide · d = divider</span>
-            </span>
-            <input value={structure} onChange={(e) => setStructure(e.target.value)} />
           </label>
         </div>
 

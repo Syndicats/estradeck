@@ -186,6 +186,7 @@ export function MentionTextarea({
             }
             if (e.key === 'Escape') {
               e.preventDefault();
+              e.stopPropagation(); // consumed dismissing the menu — don't also close a host popover
               setItems([]);
               return;
             }
@@ -201,6 +202,7 @@ export function MentionTextarea({
             }
             if (e.key === 'Escape') {
               e.preventDefault();
+              e.stopPropagation(); // consumed dismissing the ghost — don't also close a host popover
               setSuggestion('');
               ghost.cancel();
               return;

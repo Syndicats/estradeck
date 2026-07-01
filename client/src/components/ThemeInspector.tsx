@@ -28,7 +28,8 @@ const TABS = [
 export function ThemeInspector() {
   const theme = useStudio((s) => s.theme);
   const themeSlug = useStudio((s) => s.themeSlug);
-  const [tab, setTab] = useState<'slide' | 'palette' | 'theme'>('slide');
+  const tab = useStudio((s) => s.themeInspectorTab);
+  const setTab = useStudio((s) => s.setThemeInspectorTab);
 
   if (!theme) return <aside className="inspector"><div className="panel-empty">Loading theme…</div></aside>;
 

@@ -160,23 +160,33 @@ function locateRootBlock(css: string): { start: number; end: number } | null {
 /**
  * Apply a theme's variables to a deck's CSS:
  *  1. drop any prior managed block,
- *  2. rebuild the deck's own `:root` to keep only NON-inherited vars (its genuine
- *     overrides + deck-local vars like layout), so the managed block isn't shadowed,
+ *  2. rebuild the deck's own `:root` to keep only the vars that should win over the
+ *     managed block (its genuine overrides + deck-local vars like layout), so the
+ *     theme palette isn't shadowed,
  *  3. insert a fresh managed block after the leading @import.
  * Pure string→string; the caller writes the result.
  */
 export function applyThemeToCss(css: string, themeId: string, themeVars: ThemeVar[]): string {
+  // First time this deck gets a theme? Its :root is still the scaffold, which ships
+  // the full default-theme palette (see base-styles.css / themes/default). Those are
+  // template defaults, not deliberate choices — so the theme should own every var it
+  // governs. On a re-apply/sync the :root already holds only genuine overrides (the
+  // prior apply stripped the scaffold defaults), so we keep the ones that truly differ.
+  const firstApply = !readDeckThemeRef(css);
   const base = stripManagedBlock(css);
   const themeMap = new Map(themeVars.map((v) => [v.name, v.value.trim().toLowerCase()]));
 
-  // Survivors of the deck's own :root: drop vars now inherited from the theme.
+  // Survivors of the deck's own :root: drop vars the theme now provides.
   let withoutDeckRoot = base;
   const deckRoot = firstDeckRoot(safeParse(base));
   if (deckRoot) {
     const survivors: string[] = [];
     deckRoot.walkDecls((d) => {
       if (!d.prop.startsWith('--')) return;
-      if (themeMap.get(d.prop) === d.value.trim().toLowerCase()) return; // inherited from theme
+      if (themeMap.has(d.prop)) {
+        if (firstApply) return; // theme owns it; scaffold default is not an override
+        if (themeMap.get(d.prop) === d.value.trim().toLowerCase()) return; // matches theme
+      }
       survivors.push(`  ${d.prop}: ${d.value.trim()};`);
     });
     const newRoot = survivors.length ? `:root {\n${survivors.join('\n')}\n}` : '';

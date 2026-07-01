@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useStudio } from '../state/deckStore';
 import { isTypingTarget } from '../lib/slideNav';
+import { attachAltPicker, elementThemePath } from '../lib/previewHighlight';
 import * as api from '../api/client';
 
 /**
@@ -34,11 +35,33 @@ export function ThemePreview() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Hold Alt to highlight a template element; Alt + left-click jumps to its source in the
+  // Slide editor's template HTML so it can be edited directly.
+  const handleLoad = () => {
+    const doc = iframeRef.current?.contentDocument;
+    if (!doc) return;
+    try {
+      attachAltPicker(doc, (el) => {
+        const path = elementThemePath(el);
+        if (path) useStudio.getState().jumpToThemeElement(path);
+      });
+    } catch {
+      /* cross-origin shouldn't happen for the same-origin theme preview */
+    }
+  };
+
   return (
     <section className="stage">
       <div className="stage-canvas">
         {src ? (
-          <iframe ref={iframeRef} key={src} title="Theme slide preview" className="preview-frame" src={src} />
+          <iframe
+            ref={iframeRef}
+            key={src}
+            title="Theme slide preview"
+            className="preview-frame"
+            src={src}
+            onLoad={handleLoad}
+          />
         ) : (
           <div className="preview-hidden">
             <span className="preview-hidden-icon">◐</span>

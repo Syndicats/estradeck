@@ -1,8 +1,22 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStudio } from '../state/deckStore';
 import { locate, keyAt, findSlide, isSlideHidden } from '../lib/locate';
 import { navigateSlides, isTypingTarget } from '../lib/slideNav';
 import { hideRevealControls } from '../lib/previewChrome';
+import { attachAltPicker, elementPickInfo } from '../lib/previewHighlight';
+import {
+  attachRegionPicker,
+  clearRegionMarquee,
+  setRegionMarqueeBusy,
+  composeRegionPrompt,
+  type RegionContext,
+  type RegionMode,
+} from '../lib/regionPick';
+import { sectionInner } from '../lib/cmIntelligence';
+import { RegionPromptPopover } from './RegionPromptPopover';
+import * as api from '../api/client';
+
+const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 
 function waitForReveal(w: any, cb: (reveal: any) => void, tries = 60) {
   try {
@@ -63,6 +77,79 @@ export function Preview() {
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
+  // Shift+Cmd marquee → an edit-agent prompt popover for the selected region.
+  const [region, setRegion] = useState<{ pos: { left: number; top: number }; context: RegionContext } | null>(null);
+
+  const closeRegion = () => {
+    const doc = iframeRef.current?.contentDocument;
+    if (doc) clearRegionMarquee(doc);
+    setRegion(null);
+  };
+
+  const submitRegion = (text: string, mode: RegionMode, wholeSection: boolean) => {
+    const { currentDeckId, selectedKey: key, model: m } = useStudio.getState();
+    const doc = iframeRef.current?.contentDocument;
+    if (!region || !currentDeckId || !key) {
+      closeRegion();
+      return;
+    }
+    const prompt = composeRegionPrompt(text, region.context);
+
+    if (mode === 'agent') {
+      // Full agent job: enqueue an edit and jump to Agents to watch the transcript.
+      api
+        .enqueueJob(currentDeckId, { prompt, kind: 'edit', targetKey: key })
+        .then(() => {
+          useStudio.getState().setInspectorTab('ai');
+          useStudio.getState().showToast('success', 'Agent queued for this region');
+        })
+        .catch((e) => useStudio.getState().showToast('error', (e as Error).message));
+      closeRegion();
+      return;
+    }
+
+    // Slide Intelligence: close the prompt but KEEP the marked rectangle on screen, pulsing,
+    // as a live "still working" indicator until the one-shot returns (the toast auto-dismisses).
+    // 'section' mode lets it rewrite the whole <section> (incl. inline style / background); an
+    // inner-only result is spliced back into the existing section tag.
+    const slide = m ? findSlide(m, key) : null;
+    if (!slide || !m) {
+      closeRegion();
+      return;
+    }
+    const siMode = wholeSection ? 'section' : 'compose';
+    setRegion(null); // close the popover, but leave the marquee up…
+    if (doc) setRegionMarqueeBusy(doc, true); // …pulsing while the model works
+    useStudio.getState().setInspectorTab('code'); // jump to the code editor
+    useStudio.getState().showToast('info', 'Slide Intelligence…');
+    api
+      .generateSi(currentDeckId, { mode: siMode, code: slide.rawHtml, prompt })
+      .then(async ({ html }) => {
+        const out = html.trim();
+        const next =
+          siMode === 'section' && /^<section[\s>]/i.test(out)
+            ? out
+            : slide.rawHtml.slice(0, sectionInner(slide.rawHtml).start) +
+              '\n' + out + '\n' +
+              slide.rawHtml.slice(sectionInner(slide.rawHtml).end);
+        await api.putSlide(currentDeckId, key, next, m.contentHash);
+        await useStudio.getState().refreshModel();
+        useStudio.getState().showToast('success', 'Slide updated');
+      })
+      .catch((e) => useStudio.getState().showToast('error', (e as Error).message))
+      .finally(() => {
+        if (doc) clearRegionMarquee(doc); // stop the pulse when finished (ok if the iframe already reloaded)
+      });
+  };
+
+  // Close the region popover whenever the previewed slide/deck changes under it.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => closeRegion, []);
+  useEffect(() => {
+    setRegion(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedKey, deckId, previewNonce]);
+
   // (Re)load the iframe on deck switch or file change. Always assign a fresh src
   // (with a nonce) so a mid-flight navigation is never reloaded to about:blank.
   useEffect(() => {
@@ -112,7 +199,46 @@ export function Preview() {
       /* cross-origin shouldn't happen for same-origin deck */
     }
 
+    // Hold Alt to highlight a slide element; Alt + left-click jumps to its source in the
+    // Code tab so it can be edited directly.
+    try {
+      attachAltPicker(w.document, (el) => {
+        const m = useStudio.getState().model;
+        if (!m) return;
+        const info = elementPickInfo(m, el);
+        if (info) useStudio.getState().jumpToElement(info.key, info.path);
+      });
+    } catch {
+      /* cross-origin shouldn't happen for same-origin deck */
+    }
+
+    // Shift+Cmd marquee → capture the region's context and open the edit-agent popover.
+    try {
+      attachRegionPicker(w.document, ({ anchor, context }) => {
+        const iframe = iframeRef.current;
+        if (!iframe) return;
+        const ir = iframe.getBoundingClientRect(); // iframe content coords are iframe-viewport-relative
+        const left = clamp(ir.left + anchor.left, 8, window.innerWidth - 452);
+        const top = clamp(ir.top + anchor.top + anchor.height + 8, 8, window.innerHeight - 320);
+        setRegion({ pos: { left, top }, context });
+      });
+    } catch {
+      /* cross-origin shouldn't happen for same-origin deck */
+    }
+
     waitForReveal(w, (reveal) => {
+      // Never let the preview drop into reveal's "scroll view": when the pane gets narrow
+      // (default activation < 435px) reveal stacks the slides and the mouse wheel scrolls
+      // through them, which reflows the layout (flicker) and changes the active slide/hash
+      // (the URL jumps) during a resize. Disabling it keeps a single, fixed slide that just
+      // rescales. Set before the user can narrow the pane so it never activates. The deck
+      // HTML disables it too; this also covers decks created before that change.
+      try {
+        reveal.configure({ scrollActivationWidth: null, mouseWheel: false });
+      } catch {
+        /* older reveal without scroll view; ignore */
+      }
+
       // Keep the navigator highlight, the ?slideid= URL, and arrow-key selection in
       // sync when the user navigates with the preview's own arrow controls.
       const sync = () => {
@@ -155,6 +281,16 @@ export function Preview() {
           </div>
         )}
       </div>
+      {region && (
+        <RegionPromptPopover
+          pos={region.pos}
+          context={region.context}
+          deckId={deckId ?? ''}
+          slideCode={selectedSlide?.rawHtml}
+          onSubmit={submitRegion}
+          onClose={closeRegion}
+        />
+      )}
     </section>
   );
 }

@@ -22,8 +22,10 @@ export interface SiRequest {
   selection?: string;
   /** Natural-language instruction. */
   prompt: string;
-  /** compose = recompose the whole slide body (model decides placement); replace = rewrite the selection. */
-  mode: 'compose' | 'replace';
+  /** compose = recompose the whole slide body (model decides placement); replace = rewrite the
+   *  selection; section = rewrite the WHOLE <section> incl. its tag (so it can change the
+   *  section's own inline style / class / data-* like the background). */
+  mode: 'compose' | 'replace' | 'section';
 }
 
 // Static design-system + animation knowledge (the stable system prompt).
@@ -107,6 +109,9 @@ export function deckContext(deckId: string): SiContext {
 
 const THEME_NOTE = `\n\nTHEME TEMPLATE MODE\n- This is a REUSABLE THEME TEMPLATE, not a finished slide. Preserve every existing {{placeholder}} token (double curly braces) exactly as written; they are filled in per deck.\n- Where you add text a presenter would customise (a title, name, label…), use a new {{placeholder}} token instead of literal copy.\n- Reference images/videos as assets/NAME (the theme's own assets), never images/NAME.\n- There are no other slides to reference.`;
 
+// Whole-section edits are the one case where the "never output a <section>" rule is lifted.
+const SECTION_NOTE = `\n\nWHOLE-SECTION EDIT (this request only — this OVERRIDES the "never output a <section> tag" rule above): Output the COMPLETE <section …>…</section> element, including its opening tag. You MAY change the <section> tag's own class, style, and data-* attributes (e.g. data-background-color, data-background-image, its inline style) when the instruction calls for it. Keep its id unless told otherwise.`;
+
 function buildMessages(ctx: SiContext, req: SiRequest): { system: string; user: string } {
   const images = ctx.images.map((ref) => `- ${ref}`).join('\n');
   const videos = ctx.videos.map((v) => `- ${v.ref}${v.poster ? ` (poster: ${v.poster})` : ''}`).join('\n');
@@ -121,7 +126,7 @@ function buildMessages(ctx: SiContext, req: SiRequest): { system: string; user: 
 
   const tokensLabel = ctx.isTheme ? 'THEME DESIGN TOKENS (theme.css)' : 'DECK DESIGN TOKENS (styles.css)';
   const system = [
-    SYSTEM + (ctx.isTheme ? THEME_NOTE : ''),
+    SYSTEM + (ctx.isTheme ? THEME_NOTE : '') + (req.mode === 'section' ? SECTION_NOTE : ''),
     `\n--- ${tokensLabel} ---\n${ctx.styles || '(none)'}`,
     `\n--- AVAILABLE IMAGES ---\n${images || '(none)'}`,
     `\n--- AVAILABLE VIDEOS ---\n${videos || '(none)'}`,
@@ -140,6 +145,10 @@ function buildMessages(ctx: SiContext, req: SiRequest): { system: string; user: 
     user.push(
       `\n--- SELECTED HTML TO REWRITE ---\n${req.selection}`,
       `\nRewrite the selected HTML per the instruction. Output ONLY the replacement HTML for that selection.`,
+    );
+  } else if (req.mode === 'section') {
+    user.push(
+      `\nRewrite the ENTIRE slide <section> to satisfy the instruction. Output the COMPLETE <section …>…</section> element INCLUDING its opening tag — you MAY change the section tag's class, style, and data-* attributes (e.g. data-background-color) when the instruction calls for it; keep its id unless told otherwise. Keep the existing content unless the instruction says to change or remove it.`,
     );
   } else {
     user.push(

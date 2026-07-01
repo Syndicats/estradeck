@@ -6,11 +6,12 @@ import { foldGutter, codeFolding, foldKeymap } from '@codemirror/language';
 import type { CssVar } from '@studio/shared';
 import { useStudio } from '../state/deckStore';
 import { findSlide } from '../lib/locate';
-import { elementPathAt } from '../lib/codeHover';
+import { elementPathAt, offsetForPath } from '../lib/codeHover';
 import { classTokenAt, classLinkHighlighter } from '../lib/classJump';
 import { toMentionMedia } from '../lib/imageMention';
 import { makeBrandCompletionSource, extractDeckClasses, type CompletionData } from '../lib/cmComplete';
 import { colorSwatches, refreshSwatches } from '../lib/cmColor';
+import { imageThumbs, type ImageAsset } from '../lib/cmImage';
 import { numberScrubber } from '../lib/cmScrub';
 import { slidesIntelligence, type SiGenerateReq } from '../lib/cmIntelligence';
 import { SiDock, type SiSelection } from './SiDock';
@@ -23,6 +24,7 @@ export function CodeEditor() {
   const selectedKey = useStudio((s) => s.selectedKey);
   const deckId = useStudio((s) => s.currentDeckId);
   const showToast = useStudio((s) => s.showToast);
+  const codeJump = useStudio((s) => s.codeJump);
 
   const slide = model && selectedKey ? findSlide(model, selectedKey) : null;
 
@@ -41,6 +43,7 @@ export function CodeEditor() {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const completeRef = useRef<CompletionData>({ classes: [], cssVars: [] });
   const viewRef = useRef<EditorView | null>(null);
+  const appliedJumpRef = useRef(-1);
 
   // Load the deck's real classes (from styles.css) and CSS variables for brand-aware
   // autocompletion and color swatches in the editor.
@@ -96,6 +99,24 @@ export function CodeEditor() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model]);
+
+  // Alt-click in the preview lands here: once the target slide is loaded into the editor,
+  // place the cursor on the matching source element and scroll it into view.
+  useEffect(() => {
+    if (!codeJump || codeJump.nonce === appliedJumpRef.current) return;
+    if (!slide || codeJump.key !== selectedKey) return; // target slide not selected yet
+    const view = viewRef.current;
+    if (!view || docRef.current !== slide.rawHtml) return; // editor hasn't applied it yet
+    appliedJumpRef.current = codeJump.nonce; // consume once (even if the path doesn't resolve)
+    const offset = offsetForPath(view, codeJump.path);
+    if (offset == null) return;
+    view.focus();
+    view.dispatch({
+      selection: { anchor: offset },
+      effects: EditorView.scrollIntoView(offset, { y: 'center' }),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [codeJump, selectedKey, doc]);
 
   const save = useCallback(async () => {
     if (!deckId || !selectedKey || !dirtyRef.current || saving) return;
@@ -215,6 +236,21 @@ export function CodeEditor() {
     return toMentionMedia(images, videos, m?.slides ?? []);
   }, []);
 
+  // Inline image-swap thumbnails: a deck src is `images/foo.png` served at /decks/<id>/…;
+  // remote/data/absolute URLs are shown as-is.
+  const resolveImgUrl = useCallback((value: string): string | null => {
+    if (!value) return null;
+    if (/^(data:|https?:|\/\/|\/)/i.test(value)) return value;
+    const id = useStudio.getState().currentDeckId;
+    return id ? `/decks/${id}/${value}` : null;
+  }, []);
+  const listImgAssets = useCallback(async (): Promise<ImageAsset[]> => {
+    const id = useStudio.getState().currentDeckId;
+    if (!id) return [];
+    const { images } = await api.listImages(id);
+    return images.map((i) => ({ name: i.name, url: i.url, ref: i.ref }));
+  }, []);
+
   // HTML language + brand-aware completion (deck classes, CSS vars, reveal data-*).
   const editorExtensions = useMemo(() => {
     const lang = cmHtml({ autoCloseTags: false });
@@ -222,6 +258,7 @@ export function CodeEditor() {
       lang,
       lang.language.data.of({ autocomplete: makeBrandCompletionSource(() => completeRef.current) }),
       colorSwatches(() => completeRef.current.cssVars),
+      imageThumbs({ resolveUrl: resolveImgUrl, listAssets: listImgAssets }),
       numberScrubber(),
       slidesIntelligence(generateSi, getSiMedia, async (req, signal) => {
         const id = useStudio.getState().currentDeckId;
@@ -253,7 +290,7 @@ export function CodeEditor() {
       jumpExtension,
       linkHighlighter,
     ];
-  }, [hoverExtension, jumpExtension, linkHighlighter, generateSi, getSiMedia]);
+  }, [hoverExtension, jumpExtension, linkHighlighter, generateSi, getSiMedia, resolveImgUrl, listImgAssets]);
 
   // Clear the preview outline when the slide changes or the panel unmounts.
   useEffect(() => clearPreviewHighlight, [selectedKey]);

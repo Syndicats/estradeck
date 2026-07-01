@@ -57,8 +57,8 @@ export const getDeck = (id: string) => request<DeckModel>(`/api/decks/${id}`);
 export const getDeckConfig = (id: string) => request<DeckConfig>(`/api/decks/${id}/config`);
 export const patchDeckConfig = (id: string, changes: Partial<DeckConfig>) =>
   request<DeckConfig>(`/api/decks/${id}/config`, jsonBody('PATCH', changes));
-export const createDeck = (title: string, structure: string) =>
-  request<{ id: string }>('/api/decks', jsonBody('POST', { title, structure }));
+export const createDeck = (title: string) =>
+  request<{ id: string }>('/api/decks', jsonBody('POST', { title }));
 export const duplicateDeck = (id: string, title?: string) =>
   request<{ id: string }>(`/api/decks/${id}/duplicate`, jsonBody('POST', { title }));
 export const deleteDeck = (id: string) => request<void>(`/api/decks/${id}`, { method: 'DELETE' });
@@ -288,7 +288,7 @@ export const exportSlideVideo = async (
 // --- Slides Intelligence (inline ⌘K) ---
 export const generateSi = (
   id: string,
-  body: { mode: 'compose' | 'replace'; code: string; selection?: string; prompt: string },
+  body: { mode: 'compose' | 'replace' | 'section'; code: string; selection?: string; prompt: string },
 ) => request<{ html: string }>(`/api/decks/${id}/si`, jsonBody('POST', body));
 
 // Ghost-text autocomplete for the SI prompt itself (abortable for stale-request cancel).

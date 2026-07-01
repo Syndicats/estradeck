@@ -254,6 +254,21 @@ function generateHTML(options) {
         bindTap('.nav-zone.left', function () { Reveal.prev(); });
         bindTap('.nav-zone.right', function () { Reveal.next(); });
       }
+
+      // If the deck first loads in PORTRAIT on a phone, reveal.js + the chart / fragment
+      // animation scripts initialise hidden behind the rotate prompt and come up broken
+      // (charts don't render, builds don't advance) — and rotating doesn't recover them.
+      // A landscape load initialises cleanly, so reload once when the device turns to
+      // landscape. Can't loop: the reloaded page is already landscape. Slide kept via hash.
+      if (TOUCH && window.matchMedia('(orientation: portrait)').matches) {
+        var reloadOnLandscape = function () {
+          if (window.matchMedia('(orientation: landscape)').matches) location.reload();
+        };
+        var mqo = window.matchMedia('(orientation: landscape)');
+        mqo.addEventListener ? mqo.addEventListener('change', reloadOnLandscape)
+                             : mqo.addListener(reloadOnLandscape);
+        window.addEventListener('orientationchange', function () { setTimeout(reloadOnLandscape, 150); });
+      }
     })();`;
 
   return `<!doctype html>
@@ -298,6 +313,8 @@ ${slidesContent}
       transition: 'slide',
       center: false,
       overview: false,
+      scrollActivationWidth: null,  // never auto-switch to reveal's scroll view (stacked slides)
+      mouseWheel: false,            // the mouse wheel never navigates or scrolls slides
       plugins: [ RevealChart ],
       chart: {
         defaults: Object.assign({
@@ -318,7 +335,7 @@ ${slidesContent}
         '.reveal .nav-zone.left{left:0;justify-content:flex-start;padding-left:22px}' +
         '.reveal .nav-zone.right{right:0;justify-content:flex-end;padding-right:22px}' +
         '.reveal .nav-zone:hover,.reveal .nav-zone:active{opacity:1}' +
-        '@media (pointer:coarse){.reveal .nav-zone{width:18%}}' +
+        '@media (pointer:coarse){.reveal .nav-zone{width:18%;opacity:1}}' +
         '.reveal .nav-zone.disabled{pointer-events:none;opacity:0 !important}' +
         '.reveal .nav-zone .nav-arrow{width:58px;height:58px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;background:rgba(20,20,30,.35);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.3);box-shadow:0 8px 28px rgba(0,0,0,.3)}' +
         '.reveal .nav-zone .nav-arrow svg{width:26px;height:26px;display:block}';
@@ -341,9 +358,18 @@ ${slidesContent}
           right.classList.toggle('disabled', Reveal.isLastSlide() && !f.next);
         } catch (e) {}
       }
-      ['ready', 'slidechanged', 'fragmentshown', 'fragmenthidden'].forEach(function (ev) {
+      ['ready', 'slidechanged', 'fragmentshown', 'fragmenthidden', 'resize'].forEach(function (ev) {
         Reveal.on(ev, update);
       });
+      // Starting in portrait shows a "rotate" prompt while Reveal initialises hidden, which
+      // leaves its slide model stale (every edge looks first+last, so both arrows stay
+      // .disabled → invisible). On orientation change, re-sync so the arrows match the deck.
+      var resync = function () { try { Reveal.sync(); Reveal.layout(); } catch (e) {} update(); };
+      window.addEventListener('orientationchange', function () { setTimeout(resync, 300); });
+      try {
+        var mqL = window.matchMedia('(orientation: landscape)');
+        mqL.addEventListener ? mqL.addEventListener('change', resync) : mqL.addListener(resync);
+      } catch (e) {}
       update();
     })();
 

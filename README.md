@@ -5,8 +5,9 @@
 **Estradeck** is a Slides-like web editor with [reveal.js](https://revealjs.com/) as foundation.
 A deck is a single HTML file; Estradeck reads and writes that file **surgically** (byte-stable
 per-slide edits) and previews it live. On top of the `revealjs` skill in `.claude/skills/revealjs/`
-it adds reusable **themes**, an inline **AI assistant** + a parallel **agent fleet**, a **⌘K command
-palette**, and one-click **PDF / MP4 export**.
+it adds reusable **themes**, an inline **AI assistant** and a parallel **agent fleet** — drive either
+by drawing a **Magic Frame** on the slide — a **⌘K command palette**, and one-click **PDF / MP4
+export**.
 
 > *Estradeck* = **estrade** (the stage a speaker stands on) + **deck** — where your deck takes the stage.
 > Built by [Syndicats](https://www.syndicats.de). Not affiliated with or endorsed by reveal.js or Slides;
@@ -33,6 +34,12 @@ AI, or a fleet of headless agents.
 - **Per-slide code editor** — CodeMirror showing exactly the selected slide's source HTML; autosaves
   back to the file, with a conflict guard if the file changed underneath you. Format-on-demand
   (prettier).
+- **⌥-click preview → source** — hold **⌥** over the live preview to highlight the element under the
+  cursor, then ⌥-click to jump straight to that element in the Code editor (or a theme template),
+  cursor placed just inside its opening tag.
+- **Inline image swaps** — every image reference in the code (`<img src>`, `poster`,
+  `data-background-image`, CSS `url(...)`) shows a small live thumbnail; click it to swap to any image
+  in the deck's — or theme's — assets.
 - **Styles tab** — edit the deck's full `styles.css` directly, with the same hash-guarded atomic
   write.
 - **Colors panel** — the deck's palette CSS variables from `styles.css` (`--primary-color`, …) as
@@ -78,6 +85,17 @@ you switch between decks and themes from the one dropdown in the top bar.
 - **Generate multiple slides** — give a topic and a count; a planner (OpenAI) decomposes it into an
   ordered, coherent outline, reserves the placeholder slides in order, then fans out one agent per
   slide so they fill in parallel without clashing.
+- **Magic Frame (⇧⌘-drag on the preview)** — draw a rectangle over any part of the live slide to
+  brief the AI on *exactly* that region. The selection is turned into context and inlined into your
+  prompt: the elements it covers (their markup **with inline styles**), the region's position (in the
+  slide's 1280×720 space), and the background colour under it (resolved from the CSS). A popover —
+  with the same **@-mention** support for images/videos/slides as the other prompt fields — lets you
+  pick the engine:
+  - **Slide Intelligence** — a one-shot completion applied in place that jumps you to the Code editor;
+    a **whole-section** toggle (on by default) lets it rewrite the `<section>` itself so it can change
+    the slide's background / inline styles, not just the content. The marked rectangle **pulses** as a
+    live progress indicator until the edit lands.
+  - **Agent** — queues a full edit job for the slide and opens the Agents tab to watch the transcript.
 
 ### Assets
 - **Images** — drag-and-drop / pick files, or pull from a URL, into the deck's `images/` folder;
@@ -119,6 +137,9 @@ Direct shortcuts in deck mode:
 | **⌘A** | Open the Agents tab |
 | **↑ / ↓** | Previous / next slide in the navigator |
 
+**Preview gestures:** **⌥-click** an element to jump to its source in the Code editor · **⇧⌘-drag**
+a rectangle to open **Magic Frame** on that region.
+
 ---
 
 ## Folder structure
@@ -136,9 +157,11 @@ estradeck/
 │       │                        CommandPalette, ImagePicker, NewDeckModal,
 │       │                        Theme{Navigator,Inspector,Preview,Panel,AssetsPanel},
 │       │                        InsertThemeSlideModal, CopyTo{Theme,Deck}Modal,
-│       │                        VideoExportModal, MentionTextarea
+│       │                        VideoExportModal, MentionTextarea, RegionPromptPopover (Magic Frame)
 │       ├── api/                 REST client + WebSocket client
-│       ├── lib/                 CodeMirror extensions, fragment/locate helpers
+│       ├── lib/                 CodeMirror extensions (color + image swatches, Slides Intelligence),
+│       │                        previewHighlight + regionPick (⌥-click jump, Magic Frame),
+│       │                        fragment/locate helpers
 │       └── state/deckStore.ts   zustand store
 │
 ├── server/                      Node + Express + ws (dev :5174)
@@ -246,10 +269,11 @@ keys added later are picked up without a restart for the OpenAI features.
 
 ## How "New deck" works
 
-`POST /api/decks` shells out to `.claude/skills/revealjs/scripts/create-presentation.js` with a
-structure string like `1,1,d,1,1` (`1` = slide, `d` = section divider), writing `presentation.html`
-+ a copy of the default `styles.css` into `presentations/<slug>/`. **New deck** also lets you set a
-title and pick a **theme**, which is then materialized into the new deck's `styles.css`.
+`POST /api/decks` shells out to `.claude/skills/revealjs/scripts/create-presentation.js` to write a
+`presentation.html` — **a single title slide** — plus a copy of the default `styles.css` into
+`presentations/<slug>/`. **New deck** lets you set a title and pick a **theme** (materialized into the
+new deck's `styles.css`); you build out the rest from inside the studio — the navigator's **＋**, the
+agents, or **add slide from theme**.
 
 ## How the agent fleet stays safe under concurrency
 
@@ -313,7 +337,10 @@ WebSocket (`/ws`, room-per-deck via `{type:'subscribe',deckId}`): `deck-changed`
 
 - Edit jobs target one slide each; two edit jobs on the *same* slide are last-writer-wins.
 - Deleting/adding slides operates on top-level slides; vertical children are edited in place.
-- New decks support single slides (`1`) and section dividers (`d`) only — not vertical stacks.
+- New decks start as a single title slide; build out the rest from the navigator, the agents, or
+  theme slides.
+- **Magic Frame** and the ⌥-click jump are deck-preview features (the theme preview supports ⌥-click
+  jump too; the region prompt targets the deck's agents / Slides Intelligence).
 - The preview, the PDF/MP4 export, and a deck opened standalone all need network for the CDN assets.
 - `presentations/` is treated as user data; uncomment the rule in `.gitignore` to keep decks local.
 

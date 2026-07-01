@@ -14,7 +14,7 @@ intelligenceRouter.post(
       code: String(body.code ?? ''),
       selection: body.selection ? String(body.selection) : undefined,
       prompt: String(body.prompt ?? ''),
-      mode: body.mode === 'replace' ? 'replace' : 'compose',
+      mode: body.mode === 'replace' ? 'replace' : body.mode === 'section' ? 'section' : 'compose',
     });
     res.json({ html });
   }),

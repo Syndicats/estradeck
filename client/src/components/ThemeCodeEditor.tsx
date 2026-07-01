@@ -7,6 +7,8 @@ import type { CssVar } from '@studio/shared';
 import { useStudio } from '../state/deckStore';
 import { makeBrandCompletionSource, extractDeckClasses, type CompletionData } from '../lib/cmComplete';
 import { colorSwatches, refreshSwatches } from '../lib/cmColor';
+import { imageThumbs, type ImageAsset } from '../lib/cmImage';
+import { offsetForPath } from '../lib/codeHover';
 import { numberScrubber } from '../lib/cmScrub';
 import { slidesIntelligence, type SiGenerateReq } from '../lib/cmIntelligence';
 import * as api from '../api/client';
@@ -35,8 +37,11 @@ export function ThemeCodeEditor({
   onChange: (v: string) => void;
 }) {
   const showToast = useStudio((s) => s.showToast);
+  const themeCodeJump = useStudio((s) => s.themeCodeJump);
   const [formatting, setFormatting] = useState(false);
+  const [view, setView] = useState<EditorView | null>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const appliedJumpRef = useRef(-1);
   const completeRef = useRef<CompletionData>({ classes: [], cssVars: [] });
 
   // Brand-aware completion data: classes from the base components + this theme's CSS,
@@ -66,6 +71,23 @@ export function ThemeCodeEditor({
     };
   }, [themeId]);
 
+  // Alt-click in the theme preview lands here: place the cursor just inside the matching
+  // template element (after its opening tag) and scroll it into view. `view` is a dep so
+  // this re-runs once CodeMirror has mounted (the template loads async, so the editor may
+  // not exist yet when the jump request first arrives).
+  useEffect(() => {
+    if (!themeCodeJump || themeCodeJump.nonce === appliedJumpRef.current || !view) return;
+    appliedJumpRef.current = themeCodeJump.nonce; // consume once (even if the path doesn't resolve)
+    const offset = offsetForPath(view, themeCodeJump.path);
+    if (offset == null) return;
+    view.focus();
+    view.dispatch({
+      selection: { anchor: offset },
+      effects: EditorView.scrollIntoView(offset, { y: 'center' }),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [themeCodeJump, value, view]);
+
   const generate = useCallback(
     async (req: SiGenerateReq) => {
       const { html } = await api.generateThemeSi(themeId, req);
@@ -81,6 +103,23 @@ export function ThemeCodeEditor({
       thumbUrl: a.kind === 'video' ? a.posterUrl : a.url,
       kind: a.kind,
     }));
+  }, [themeId]);
+
+  // Inline image-swap thumbnails: a theme ref is `assets/foo.png` served at
+  // /themes/<id>/assets/…; remote/data/absolute URLs are shown as-is.
+  const resolveImgUrl = useCallback(
+    (value: string): string | null => {
+      if (!value) return null;
+      if (/^(data:|https?:|\/\/|\/)/i.test(value)) return value;
+      return `/themes/${themeId}/${value}`;
+    },
+    [themeId],
+  );
+  const listImgAssets = useCallback(async (): Promise<ImageAsset[]> => {
+    const { assets } = await api.listThemeAssets(themeId).catch(() => ({ assets: [] }));
+    return assets
+      .filter((a) => a.kind === 'image')
+      .map((a) => ({ name: a.name, url: a.url, ref: a.ref }));
   }, [themeId]);
   const complete = useCallback(
     async (req: { prompt: string; mode: 'compose' | 'replace'; code?: string }, signal: AbortSignal) => {
@@ -113,6 +152,7 @@ export function ThemeCodeEditor({
       lang,
       lang.language.data.of({ autocomplete: makeBrandCompletionSource(() => completeRef.current) }),
       colorSwatches(() => completeRef.current.cssVars),
+      imageThumbs({ resolveUrl: resolveImgUrl, listAssets: listImgAssets }),
       numberScrubber(),
       slidesIntelligence(generate, getMedia, complete),
       codeFolding(),
@@ -120,7 +160,7 @@ export function ThemeCodeEditor({
       keymap.of(foldKeymap),
       EditorView.lineWrapping,
     ];
-  }, [generate, getMedia, complete]);
+  }, [generate, getMedia, complete, resolveImgUrl, listImgAssets]);
 
   return (
     <div className="theme-cm">
@@ -142,8 +182,9 @@ export function ThemeCodeEditor({
           height="100%"
           className="cm-fill"
           extensions={extensions}
-          onCreateEditor={(view) => {
-            viewRef.current = view;
+          onCreateEditor={(v) => {
+            viewRef.current = v;
+            setView(v);
           }}
           onChange={onChange}
           basicSetup={{

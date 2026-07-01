@@ -976,3 +976,16 @@
   color: transparent;
 }
 .estradeck-badge .eb-mark .bm-p { color: #fea9c6; }
+
+/* Shrink the badge on phones/tablets — the deck scales down but a fixed-size badge
+   would otherwise look oversized against the smaller slide content. */
+@media (max-width: 768px), (max-height: 480px) {
+  .estradeck-badge {
+    right: 6px;
+    bottom: 6px;
+    gap: 3px;
+    padding: 2px 7px 2px 6px;
+    font-size: 4.5pt;
+  }
+  .estradeck-badge .eb-logo { font-size: 4pt; }
+}
